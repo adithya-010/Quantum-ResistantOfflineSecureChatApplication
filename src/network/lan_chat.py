@@ -1,90 +1,106 @@
+# src/network/lan_chat.py
 import socket
 import threading
-from utils.logger import get_logger
+from src.utils.logger import get_logger
+from liboqs import KeyEncapsulation, Sign
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import os
 
-logger = get_logger("LANChat")
-
-class LANChat:
-    def __init__(self, host="0.0.0.0", port=12346, username="User"):
-        self.host = host
-        self.port = port
+class LanChat:
+    def __init__(self, username, logger, port=12346):
         self.username = username
-        self.server_socket = None
-        self.peers = {}  # (ip,port):socket
+        self.logger = logger
+        self.port = port
+        self.peers = {}  # (ip, port) : socket
+        self.shared_keys = {}  # (ip, port) : symmetric key
+        self.sign_keys = {}    # (ip, port) : sign key for verification
         self.running = True
 
-    # --- SERVER HANDLER ---
-    def start_server(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((self.host, self.port))
-        self.server_socket.listen(5)
-        logger.info(f"Listening for peers on {self.host}:{self.port} ...")
+        # Kyber Key Pair for key exchange
+        self.kem = KeyEncapsulation('Kyber512')
+        self.private_key, self.public_key = self.kem.generate_keypair()
+
+        # Dilithium keys for signing
+        self.sign = Sign('Dilithium2')
+        self.sign_private, self.sign_public = self.sign.generate_keypair()
+
+        # Start server thread
+        self.server_thread = threading.Thread(target=self._start_server, daemon=True)
+        self.server_thread.start()
+        self.logger.info(f"Server started on port {self.port}")
+
+    def _start_server(self):
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_sock.bind(('0.0.0.0', self.port))
+        server_sock.listen(5)
 
         while self.running:
             try:
-                conn, addr = self.server_socket.accept()
-                self.peers[addr] = conn
-                logger.info(f"✅ Connected: {addr}")
-                threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
+                client_sock, addr = server_sock.accept()
+                self.logger.info(f"Incoming connection from {addr}")
+                threading.Thread(target=self._handle_client, args=(client_sock, addr), daemon=True).start()
             except Exception as e:
-                logger.error(f"Server error: {e}")
-                break
+                self.logger.error(f"Server error: {e}")
 
-    # --- CLIENT CONNECT ---
-    def connect_to_peer(self, ip, port):
+    def _handle_client(self, client_sock, addr):
+        self.peers[addr] = client_sock
+        # Key exchange on first connect
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((ip, port))
-            self.peers[(ip, port)] = s
-            threading.Thread(target=self.handle_client, args=(s, (ip, port)), daemon=True).start()
-            logger.info(f"🤝 Connected to peer {ip}:{port}")
+            # Send our public key and signature
+            client_sock.send(self.public_key)
+            client_sock.send(self.sign_public)
         except Exception as e:
-            logger.error(f"Connection failed: {e}")
+            self.logger.error(f"Failed to send keys to {addr}: {e}")
 
-    # --- MESSAGE BROADCAST ---
-    def broadcast_message(self, message):
-        full_msg = f"[{self.username}] {message}"
-        for addr, sock in list(self.peers.items()):
-            try:
-                sock.sendall(full_msg.encode())
-            except Exception:
-                logger.warning(f"Lost connection to {addr}")
-                del self.peers[addr]
-        logger.info(f"📤 Sent: {message}")
-
-    # --- RECEIVE HANDLER ---
-    def handle_client(self, conn, addr):
         while self.running:
             try:
-                data = conn.recv(1024)
+                data = client_sock.recv(4096)
                 if not data:
                     break
-                logger.info(f"💬 {data.decode()}")
-            except Exception:
+                # For now just print encrypted data
+                print(f"\n🔒 [Encrypted Message from {addr}] {data.hex()[:60]}...")
+            except Exception as e:
+                self.logger.error(f"Client error {addr}: {e}")
                 break
-        conn.close()
-        if addr in self.peers:
-            del self.peers[addr]
-        logger.warning(f"❌ Disconnected: {addr}")
+        client_sock.close()
+        del self.peers[addr]
+        self.logger.info(f"Connection closed: {addr}")
 
-    # --- STATUS/UTILS ---
+    def connect(self, ip, port):
+        try:
+            peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            peer_sock.connect((ip, port))
+            self.peers[(ip, port)] = peer_sock
+            threading.Thread(target=self._handle_client, args=(peer_sock, (ip, port)), daemon=True).start()
+            self.logger.info(f"Connected to peer {ip}:{port}")
+        except Exception as e:
+            self.logger.error(f"Failed to connect to {ip}:{port} - {e}")
+
+    def send_message(self, message):
+        for addr, peer_sock in self.peers.items():
+            try:
+                # For now sending plain text; we will later encrypt with shared key
+                peer_sock.send(message.encode())
+            except Exception as e:
+                self.logger.error(f"Failed to send message to {addr} - {e}")
+
     def list_peers(self):
         if not self.peers:
-            logger.info("No active peers.")
-        for addr in self.peers:
-            logger.info(f"Peer: {addr}")
+            print("No connected peers.")
+        else:
+            for addr in self.peers:
+                print(f"- {addr}")
 
     def show_status(self):
-        logger.info(f"Listening on {self.host}:{self.port} | Peers: {len(self.peers)}")
+        print(f"Connected peers: {len(self.peers)}")
 
-    def close_all(self):
+    def shutdown(self):
         self.running = False
-        for s in self.peers.values():
+        for peer_sock in self.peers.values():
             try:
-                s.close()
-            except Exception:
+                peer_sock.close()
+            except:
                 pass
-        if self.server_socket:
-            self.server_socket.close()
-        logger.info("All connections closed.")
+        self.peers.clear()
+        self.logger.info("LAN Chat shutdown complete.")

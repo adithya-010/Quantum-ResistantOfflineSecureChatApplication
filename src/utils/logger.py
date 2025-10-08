@@ -1,29 +1,29 @@
+# src/utils/logger.py
 import logging
 import colorlog
-from datetime import datetime
 
-def get_logger(name="APP"):
-    log_format = (
-        "%(log_color)s[%(asctime)s] [%(name)s] [%(levelname)s]%(reset)s %(message)s"
-    )
-    colors = {
-        "DEBUG": "cyan",
-        "INFO": "green",
-        "WARNING": "yellow",
-        "ERROR": "red",
-        "CRITICAL": "bold_red",
-    }
-
+def get_logger(name="QuantumSecureChat"):
+    # Create logger
     logger = logging.getLogger(name)
-    if not logger.handlers:
-        handler = colorlog.StreamHandler()
-        handler.setFormatter(colorlog.ColoredFormatter(log_format, log_colors=colors))
-        logger.addHandler(handler)
-        logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)
 
-        # Optional file logging
-        file_handler = logging.FileHandler(f"logs_{datetime.now().date()}.log")
-        file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"))
-        logger.addHandler(file_handler)
+    # Prevent adding multiple handlers if called multiple times
+    if not logger.handlers:
+        # Create console handler with color
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+
+        formatter = colorlog.ColoredFormatter(
+            "%(log_color)s[%(levelname)s]%(reset)s %(name)s: %(message)s",
+            log_colors={
+                "DEBUG": "cyan",
+                "INFO": "green",
+                "WARNING": "yellow",
+                "ERROR": "red",
+                "CRITICAL": "bold_red",
+            }
+        )
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
 
     return logger

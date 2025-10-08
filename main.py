@@ -14,61 +14,76 @@ Features:
 - QR Code Pairing (Coming in Phase 3)
 - Steganography Messaging (Coming in Phase 3)
 """
-import threading
-from utils.logger import get_logger
-from network.lan_chat import LANChat
-
-logger = get_logger("MAIN")
+# main.py
+import sys
+from src.utils.logger import get_logger
+from src.network.lan_chat import LanChat
 
 def main():
-    logger.info("🚀 Quantum-Secure Chat (Phase 1 – LAN Module)")
-    username = input("Enter your display name: ").strip() or "Anonymous"
+    logger = get_logger("QuantumSecureChat")
+    logger.info("Starting Quantum Secure Chat Application (Phase 2 - Quantum Crypto)")
 
-    # Start LAN chat engine
-    chat = LANChat(username=username)
-    threading.Thread(target=chat.start_server, daemon=True).start()
+    # Ask user for name
+    username = input("Enter your name: ").strip()
+    if not username:
+        username = "User"
 
-    logger.info("Type 'help' for available commands.")
+    # Initialize LAN chat (Phase 2 ready)
+    chat = LanChat(username, logger)
+    logger.info(f"Chat initialized for user: {username}")
+
+    print("Type 'help' for list of commands.\n")
+
     while True:
         try:
-            cmd = input("> ").strip()
+            cmd = input(f"{username}> ").strip()
             if not cmd:
                 continue
 
-            if cmd.startswith("connect"):
-                _, ip, port = cmd.split()
-                chat.connect_to_peer(ip, int(port))
+            parts = cmd.split(" ", 2)
+            command = parts[0].lower()
 
-            elif cmd.startswith("send"):
-                msg = cmd.partition(" ")[2]
-                chat.broadcast_message(msg)
+            if command == "connect" and len(parts) >= 3:
+                ip = parts[1]
+                port = int(parts[2])
+                chat.connect(ip, port)
 
-            elif cmd == "list":
-                chat.list_peers()
+            elif command == "send" and len(parts) >= 2:
+                message = parts[1]
+                # Phase 2: send encrypted message
+                chat.send_message(message)
 
-            elif cmd == "status":
+            elif command == "status":
                 chat.show_status()
 
-            elif cmd == "help":
-                print("""
-Commands:
- connect <IP> <PORT>  → connect to peer
- send <message>       → send a chat message
- list                 → list connected peers
- status               → connection status
- quit                 → exit
-                """)
+            elif command == "list":
+                chat.list_peers()
 
-            elif cmd == "quit":
-                logger.info("Shutting down...")
-                chat.close_all()
+            elif command == "help":
+                print("""
+Available commands:
+connect <IP> <port>  - Connect to another peer
+send <message>       - Send encrypted message to all peers
+status               - Show connection status
+list                 - List connected devices
+help                 - Show this help
+quit                 - Exit application
+""")
+
+            elif command == "quit":
+                print("Exiting chat...")
+                chat.shutdown()
                 break
 
             else:
-                logger.warning("Unknown command. Type 'help' for options.")
+                print("Unknown command. Type 'help' for commands.")
 
+        except KeyboardInterrupt:
+            print("\nExiting chat...")
+            chat.shutdown()
+            sys.exit(0)
         except Exception as e:
-            logger.error(f"Command error: {e}")
+            logger.error(f"Error: {e}")
 
 if __name__ == "__main__":
     main()

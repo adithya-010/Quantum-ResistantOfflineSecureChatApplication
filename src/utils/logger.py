@@ -1,42 +1,29 @@
 import logging
-import sys
+import colorlog
+from datetime import datetime
 
+def get_logger(name="APP"):
+    log_format = (
+        "%(log_color)s[%(asctime)s] [%(name)s] [%(levelname)s]%(reset)s %(message)s"
+    )
+    colors = {
+        "DEBUG": "cyan",
+        "INFO": "green",
+        "WARNING": "yellow",
+        "ERROR": "red",
+        "CRITICAL": "bold_red",
+    }
 
-def setup_logger(name, level=logging.INFO):
-    """Set up a logger for the application"""
-
-    # Create logger
     logger = logging.getLogger(name)
-    logger.setLevel(level)
-
-    # Avoid adding handlers multiple times
     if not logger.handlers:
-        # Create console handler
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(level)
-
-        # Create formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%H:%M:%S'
-        )
-        handler.setFormatter(formatter)
-
-        # Add handler to logger
+        handler = colorlog.StreamHandler()
+        handler.setFormatter(colorlog.ColoredFormatter(log_format, log_colors=colors))
         logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        # Optional file logging
+        file_handler = logging.FileHandler(f"logs_{datetime.now().date()}.log")
+        file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"))
+        logger.addHandler(file_handler)
 
     return logger
-
-
-# Test function
-def test_logger():
-    """Test the logger setup"""
-    log = setup_logger("TEST")
-    log.info("Logger test - this is working!")
-    log.debug("Debug message")
-    log.warning("Warning message")
-    log.error("Error message")
-
-
-if __name__ == "__main__":
-    test_logger()

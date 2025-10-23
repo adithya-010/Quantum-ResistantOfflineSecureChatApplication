@@ -1,29 +1,43 @@
 # src/utils/logger.py
 import logging
-import colorlog
+import sys
 
-def get_logger(name="QuantumSecureChat"):
+
+def setup_logger(name, level=logging.INFO):
+    """Set up a logger for the application"""
+
     # Create logger
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(level)
 
-    # Prevent adding multiple handlers if called multiple times
+    # Avoid adding handlers multiple times
     if not logger.handlers:
-        # Create console handler with color
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.DEBUG)
+        # Create console handler
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(level)
 
-        formatter = colorlog.ColoredFormatter(
-            "%(log_color)s[%(levelname)s]%(reset)s %(name)s: %(message)s",
-            log_colors={
-                "DEBUG": "cyan",
-                "INFO": "green",
-                "WARNING": "yellow",
-                "ERROR": "red",
-                "CRITICAL": "bold_red",
-            }
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%H:%M:%S'
         )
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+        handler.setFormatter(formatter)
+
+        # Add handler to logger
+        logger.addHandler(handler)
 
     return logger
+
+
+# Test function
+def test_logger():
+    """Test the logger setup"""
+    log = setup_logger("TEST")
+    log.info("Logger test - this is working!")
+    log.debug("Debug message")
+    log.warning("Warning message")
+    log.error("Error message")
+
+
+if __name__ == "__main__":
+    test_logger()

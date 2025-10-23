@@ -1,8 +1,13 @@
-# Quantum-Secure Chat Dependencies
-qrcode>=7.4.2
+# Essential dependencies
+qrcode[pil]>=7.4.2
 Pillow>=10.0.0
-stegano>=0.9.3
-numpy>=1.24.0
 opencv-python>=4.8.0
-websockets>=11.0.0
+stegano>=0.9.3
+
+# Optional dependencies
+liboqs-python>=0.8.0
 cryptography>=41.0.0
+websockets>=11.0.0
+
+# Development dependencies
+pytest>=7.0.0

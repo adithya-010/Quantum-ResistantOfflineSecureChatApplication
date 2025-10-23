@@ -1,106 +1,206 @@
-# src/network/lan_chat.py
 import socket
 import threading
-from src.utils.logger import get_logger
-from liboqs import KeyEncapsulation, Sign
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-import os
+import json
+import time
+from src.utils.logger import setup_logger
 
-class LanChat:
-    def __init__(self, username, logger, port=12346):
-        self.username = username
-        self.logger = logger
+
+class LANChat:
+    def __init__(self, host='0.0.0.0', port=23456):
+        self.host = host
         self.port = port
-        self.peers = {}  # (ip, port) : socket
-        self.shared_keys = {}  # (ip, port) : symmetric key
-        self.sign_keys = {}    # (ip, port) : sign key for verification
-        self.running = True
+        self.socket = None
+        self.connections = []
+        self.connection_info = {}
+        self.running = False
+        self.logger = setup_logger("LANChat")
 
-        # Kyber Key Pair for key exchange
-        self.kem = KeyEncapsulation('Kyber512')
-        self.private_key, self.public_key = self.kem.generate_keypair()
-
-        # Dilithium keys for signing
-        self.sign = Sign('Dilithium2')
-        self.sign_private, self.sign_public = self.sign.generate_keypair()
-
-        # Start server thread
-        self.server_thread = threading.Thread(target=self._start_server, daemon=True)
-        self.server_thread.start()
-        self.logger.info(f"Server started on port {self.port}")
-
-    def _start_server(self):
-        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind(('0.0.0.0', self.port))
-        server_sock.listen(5)
-
-        while self.running:
-            try:
-                client_sock, addr = server_sock.accept()
-                self.logger.info(f"Incoming connection from {addr}")
-                threading.Thread(target=self._handle_client, args=(client_sock, addr), daemon=True).start()
-            except Exception as e:
-                self.logger.error(f"Server error: {e}")
-
-    def _handle_client(self, client_sock, addr):
-        self.peers[addr] = client_sock
-        # Key exchange on first connect
+    def start_server(self):
+        """Start the chat server"""
         try:
-            # Send our public key and signature
-            client_sock.send(self.public_key)
-            client_sock.send(self.sign_public)
-        except Exception as e:
-            self.logger.error(f"Failed to send keys to {addr}: {e}")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind((self.host, self.port))
+            self.socket.listen(5)
+            self.running = True
 
-        while self.running:
-            try:
-                data = client_sock.recv(4096)
+            self.logger.info(f"🚀 Server started on {self.host}:{self.port}")
+
+            while self.running:
+                try:
+                    conn, addr = self.socket.accept()
+                    self.connections.append(conn)
+                    self.connection_info[conn] = {
+                        'address': addr,
+                        'connected_at': time.time()
+                    }
+
+                    self.logger.info(f"✅ New connection from {addr}")
+
+                    client_thread = threading.Thread(
+                        target=self.handle_client,
+                        args=(conn, addr),
+                        daemon=True
+                    )
+                    client_thread.start()
+
+                except Exception as e:
+                    if self.running:
+                        self.logger.error(f"Error accepting connection: {e}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to start server: {e}")
+            raise
+
+    def handle_client(self, conn, addr):
+        """Handle messages from a client"""
+        try:
+            while self.running:
+                data = conn.recv(1024).decode('utf-8')
                 if not data:
                     break
-                # For now just print encrypted data
-                print(f"\n🔒 [Encrypted Message from {addr}] {data.hex()[:60]}...")
-            except Exception as e:
-                self.logger.error(f"Client error {addr}: {e}")
-                break
-        client_sock.close()
-        del self.peers[addr]
-        self.logger.info(f"Connection closed: {addr}")
 
-    def connect(self, ip, port):
-        try:
-            peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            peer_sock.connect((ip, port))
-            self.peers[(ip, port)] = peer_sock
-            threading.Thread(target=self._handle_client, args=(peer_sock, (ip, port)), daemon=True).start()
-            self.logger.info(f"Connected to peer {ip}:{port}")
+                try:
+                    message_data = json.loads(data)
+                    if 'type' in message_data and message_data['type'] == 'chat':
+                        message = message_data['content']
+                    else:
+                        message = data
+                except:
+                    message = data
+
+                self.logger.info(f"📨 Received from {addr}: {message}")
+                self.broadcast(message, conn)
+
         except Exception as e:
-            self.logger.error(f"Failed to connect to {ip}:{port} - {e}")
+            self.logger.error(f"Error handling client {addr}: {e}")
+        finally:
+            self.close_connection(conn, addr)
 
-    def send_message(self, message):
-        for addr, peer_sock in self.peers.items():
+    def broadcast(self, message, sender_conn):
+        """Send message to all connected clients except sender"""
+        disconnected = []
+        for conn in self.connections:
+            if conn != sender_conn:
+                try:
+                    message_data = json.dumps({
+                        'type': 'chat',
+                        'content': message,
+                        'timestamp': time.time()
+                    })
+                    conn.send(message_data.encode('utf-8'))
+                except:
+                    disconnected.append(conn)
+
+        for conn in disconnected:
+            self.close_connection(conn, "disconnected during broadcast")
+
+    def connect_to_peer(self, peer_ip, peer_port):
+        """Connect to another chat instance"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((peer_ip, peer_port))
+            self.connections.append(sock)
+
+            self.connection_info[sock] = {
+                'address': (peer_ip, peer_port),
+                'connected_at': time.time()
+            }
+
+            peer_thread = threading.Thread(
+                target=self.handle_peer_messages,
+                args=(sock, f"{peer_ip}:{peer_port}"),
+                daemon=True
+            )
+            peer_thread.start()
+
+            self.logger.info(f"✅ Connected to peer: {peer_ip}:{peer_port}")
+            return sock
+
+        except Exception as e:
+            self.logger.error(f"Failed to connect to {peer_ip}:{peer_port}: {e}")
+            return None
+
+    def handle_peer_messages(self, sock, peer_address):
+        """Handle incoming messages from a peer"""
+        try:
+            while self.running:
+                data = sock.recv(1024).decode('utf-8')
+                if not data:
+                    break
+
+                try:
+                    message_data = json.loads(data)
+                    message = message_data.get('content', data)
+                except:
+                    message = data
+
+                self.logger.info(f"📨 Message from {peer_address}: {message}")
+        except:
+            self.logger.info(f"❌ Peer disconnected: {peer_address}")
+        finally:
+            self.close_connection(sock, peer_address)
+
+    def send_message(self, message, target_sock=None):
+        """Send a message to a specific connection or broadcast"""
+        message_data = json.dumps({
+            'type': 'chat',
+            'content': message,
+            'timestamp': time.time()
+        })
+
+        if target_sock:
             try:
-                # For now sending plain text; we will later encrypt with shared key
-                peer_sock.send(message.encode())
-            except Exception as e:
-                self.logger.error(f"Failed to send message to {addr} - {e}")
-
-    def list_peers(self):
-        if not self.peers:
-            print("No connected peers.")
-        else:
-            for addr in self.peers:
-                print(f"- {addr}")
-
-    def show_status(self):
-        print(f"Connected peers: {len(self.peers)}")
-
-    def shutdown(self):
-        self.running = False
-        for peer_sock in self.peers.values():
-            try:
-                peer_sock.close()
+                target_sock.send(message_data.encode('utf-8'))
+                return True
             except:
-                pass
-        self.peers.clear()
-        self.logger.info("LAN Chat shutdown complete.")
+                self.logger.error("Failed to send message to specific peer")
+                return False
+        else:
+            self.broadcast(message, None)
+            return True
+
+    def get_connection_count(self):
+        """Get number of active connections"""
+        return len(self.connections)
+
+    def get_connection_list(self):
+        """Get list of active connections"""
+        return [str(info['address']) for info in self.connection_info.values()]
+
+    def close_connection(self, conn, identifier):
+        """Close a connection and clean up"""
+        try:
+            conn.close()
+        except:
+            pass
+
+        if conn in self.connections:
+            self.connections.remove(conn)
+
+        if conn in self.connection_info:
+            del self.connection_info[conn]
+
+        self.logger.info(f"❌ Connection closed: {identifier}")
+
+    def stop(self):
+        """Stop the server and clean up"""
+        self.running = False
+        if self.socket:
+            self.socket.close()
+
+        for conn in self.connections[:]:
+            self.close_connection(conn, "shutdown")
+
+        self.connections.clear()
+        self.connection_info.clear()
+        self.logger.info("🛑 Server stopped")
+
+
+if __name__ == "__main__":
+    print("Testing LAN Chat...")
+    chat = LANChat()
+    server_thread = threading.Thread(target=chat.start_server, daemon=True)
+    server_thread.start()
+    input("Press Enter to stop...")
+    chat.stop()

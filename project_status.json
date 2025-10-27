@@ -1,0 +1,50 @@
+{
+  "project_structure": {
+    "passed": 21,
+    "failed": 0,
+    "details": [
+      "\u2705 Directory: src",
+      "\u2705 Directory: src/network",
+      "\u2705 Directory: src/crypto",
+      "\u2705 Directory: src/pairing",
+      "\u2705 Directory: src/steganography",
+      "\u2705 Directory: src/utils",
+      "\u2705 File: main.py",
+      "\u2705 File: simple_test.py",
+      "\u2705 File: diagnose_network.py",
+      "\u2705 File: project_status_checker.py",
+      "\u2705 File: requirements.txt",
+      "\u2705 File: src/network/__init__.py",
+      "\u2705 File: src/network/lan_chat.py",
+      "\u2705 File: src/crypto/__init__.py",
+      "\u2705 File: src/crypto/pqc.py",
+      "\u2705 File: src/pairing/__init__.py",
+      "\u2705 File: src/pairing/qr_pairing.py",
+      "\u2705 File: src/steganography/__init__.py",
+      "\u2705 File: src/steganography/stego.py",
+      "\u2705 File: src/utils/__init__.py",
+      "\u2705 File: src/utils/logger.py"
+    ]
+  },
+  "dependencies": {
+    "passed": 6,
+    "failed": 1,
+    "missing": [
+      {
+        "import": "liboqs",
+        "pip": "liboqs-python",
+        "essential": false
+      }
+    ]
+  },
+  "functionality": {
+    "passed": 4,
+    "failed": 0,
+    "details": [
+      "\u2705 Logger Module",
+      "\u2705 LAN Chat Module",
+      "\u2705 Steganography",
+      "\u2705 QR Code Generation"
+    ]
+  }
+}

@@ -106,21 +106,55 @@ class QuantumSecureChat:
         print(f"  Server Running: {'✅' if self.is_running else '❌'}")
 
     def show_crypto_status(self):
-        """Display quantum cryptography status"""
-        if not self.quantum_crypto:
-            print("❌ Quantum cryptography is disabled")
-            return
+            """Display quantum cryptography status using oqs library"""
+            print("\n🔐 QUANTUM CRYPTOGRAPHY STATUS:")
 
-        print("\n🔐 QUANTUM CRYPTOGRAPHY STATUS:")
-        try:
-            import liboqs
-            print("✅ liboqs library: LOADED")
-            kems = liboqs.get_enabled_KEM_mechanisms()
-            sigs = liboqs.get_enabled_sig_mechanisms()
-            print(f"  Available KEMs: {len(kems)}")
-            print(f"  Available Signatures: {len(sigs)}")
-        except ImportError:
-            print("❌ liboqs library: NOT FOUND")
+            if not self.quantum_crypto:
+                print("❌ Quantum cryptography is disabled")
+                return
+
+            try:
+                import oqs
+                print("✅ OQS library: LOADED")
+
+                # Fetch supported algorithms
+                kems = oqs.get_enabled_kem_mechanisms()
+                sigs = oqs.get_enabled_sig_mechanisms()
+
+                if not kems or not sigs:
+                    print("⚠️  No KEM or signature mechanisms found. Check your liboqs installation.")
+                    return
+
+                print(f"\n🧩 Supported KEMs ({len(kems)}):")
+                for kem in kems[:10]:
+                    print(f"   - {kem}")
+                if len(kems) > 10:
+                    print(f"   ... and {len(kems) - 10} more")
+
+                print(f"\n🧩 Supported Signature Schemes ({len(sigs)}):")
+                for sig in sigs[:10]:
+                    print(f"   - {sig}")
+                if len(sigs) > 10:
+                    print(f"   ... and {len(sigs) - 10} more")
+
+                # Quick KEM test
+                print("\n⚙️  Performing KEM handshake test (Kyber512)...")
+                kem = oqs.KeyEncapsulation("Kyber512")
+                public_key = kem.generate_keypair()
+                ciphertext, shared_secret_sender = kem.encap_secret(public_key)
+                shared_secret_receiver = kem.decap_secret(ciphertext)
+
+                if shared_secret_sender == shared_secret_receiver:
+                    print("✅ Handshake successful — shared secrets match")
+                else:
+                    print("❌ Handshake failed — shared secrets mismatch")
+
+            except ImportError:
+                print("❌ OQS library: NOT FOUND. Please ensure liboqs and pybind11-oqs are installed.")
+            except AttributeError as e:
+                print(f"❌ Attribute error: {e}")
+            except Exception as e:
+                print(f"❌ Error processing command: {e}")
 
     def start(self):
         """Start the chat application"""

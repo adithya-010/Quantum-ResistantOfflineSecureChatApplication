@@ -27,6 +27,7 @@ import threading
 import time
 import json
 import argparse
+import socket
 
 # Add current directory to Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -84,14 +85,14 @@ class QuantumSecureChat:
         print("  quit                   - Exit application")
 
     def get_network_info(self):
-        """Get local network information"""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            import socket
-            hostname = socket.gethostname()
-            local_ip = socket.gethostbyname(hostname)
-            return hostname, local_ip
-        except:
-            return "Unknown", "127.0.0.1"
+            # Doesn't need to be reachable, just used to find the default interface
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return socket.gethostname(), local_ip
 
     def show_status(self):
         """Display current application status"""

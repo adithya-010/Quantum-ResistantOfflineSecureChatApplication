@@ -1,206 +1,260 @@
 import socket
 import threading
 import json
-import time
-from src.utils.logger import setup_logger
+import base64
+import os
+import traceback
+
+from src.crypto.pqc import QuantumCrypto
 
 
 class LANChat:
-    def __init__(self, host='0.0.0.0', port=23456):
-        self.host = host
-        self.port = port
-        self.socket = None
-        self.connections = []
-        self.connection_info = {}
-        self.running = False
-        self.logger = setup_logger("LANChat")
+    """
+    TCP chat with newline-delimited JSON frames.
+    Performs a Kyber-based or X25519 handshake, then encrypts all messages/files.
+    """
 
+    def __init__(self, port=23456):
+        self.port = int(port)
+        self.server_socket = None
+        self.connections = []  # list of dict: {sock, addr, shared}
+        self._stop_flag = threading.Event()
+        self.qc = QuantumCrypto()
+
+        # Directory to save received files
+        self.recv_dir = os.path.join(os.getcwd(), "received")
+        os.makedirs(self.recv_dir, exist_ok=True)
+
+    # ---------------- Server ----------------
     def start_server(self):
-        """Start the chat server"""
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
-            self.socket.listen(5)
-            self.running = True
-
-            self.logger.info(f"🚀 Server started on {self.host}:{self.port}")
-
-            while self.running:
-                try:
-                    conn, addr = self.socket.accept()
-                    self.connections.append(conn)
-                    self.connection_info[conn] = {
-                        'address': addr,
-                        'connected_at': time.time()
-                    }
-
-                    self.logger.info(f"✅ New connection from {addr}")
-
-                    client_thread = threading.Thread(
-                        target=self.handle_client,
-                        args=(conn, addr),
-                        daemon=True
-                    )
-                    client_thread.start()
-
-                except Exception as e:
-                    if self.running:
-                        self.logger.error(f"Error accepting connection: {e}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to start server: {e}")
-            raise
-
-    def handle_client(self, conn, addr):
-        """Handle messages from a client"""
-        try:
-            while self.running:
-                data = conn.recv(1024).decode('utf-8')
-                if not data:
-                    break
-
-                try:
-                    message_data = json.loads(data)
-                    if 'type' in message_data and message_data['type'] == 'chat':
-                        message = message_data['content']
-                    else:
-                        message = data
-                except:
-                    message = data
-
-                self.logger.info(f"📨 Received from {addr}: {message}")
-                self.broadcast(message, conn)
-
-        except Exception as e:
-            self.logger.error(f"Error handling client {addr}: {e}")
-        finally:
-            self.close_connection(conn, addr)
-
-    def broadcast(self, message, sender_conn):
-        """Send message to all connected clients except sender"""
-        disconnected = []
-        for conn in self.connections:
-            if conn != sender_conn:
-                try:
-                    message_data = json.dumps({
-                        'type': 'chat',
-                        'content': message,
-                        'timestamp': time.time()
-                    })
-                    conn.send(message_data.encode('utf-8'))
-                except:
-                    disconnected.append(conn)
-
-        for conn in disconnected:
-            self.close_connection(conn, "disconnected during broadcast")
-
-    def connect_to_peer(self, peer_ip, peer_port):
-        """Connect to another chat instance"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((peer_ip, peer_port))
-            self.connections.append(sock)
-
-            self.connection_info[sock] = {
-                'address': (peer_ip, peer_port),
-                'connected_at': time.time()
-            }
-
-            peer_thread = threading.Thread(
-                target=self.handle_peer_messages,
-                args=(sock, f"{peer_ip}:{peer_port}"),
-                daemon=True
-            )
-            peer_thread.start()
-
-            self.logger.info(f"✅ Connected to peer: {peer_ip}:{peer_port}")
-            return sock
-
-        except Exception as e:
-            self.logger.error(f"Failed to connect to {peer_ip}:{peer_port}: {e}")
-            return None
-
-    def handle_peer_messages(self, sock, peer_address):
-        """Handle incoming messages from a peer"""
-        try:
-            while self.running:
-                data = sock.recv(1024).decode('utf-8')
-                if not data:
-                    break
-
-                try:
-                    message_data = json.loads(data)
-                    message = message_data.get('content', data)
-                except:
-                    message = data
-
-                self.logger.info(f"📨 Message from {peer_address}: {message}")
-        except:
-            self.logger.info(f"❌ Peer disconnected: {peer_address}")
-        finally:
-            self.close_connection(sock, peer_address)
-
-    def send_message(self, message, target_sock=None):
-        """Send a message to a specific connection or broadcast"""
-        message_data = json.dumps({
-            'type': 'chat',
-            'content': message,
-            'timestamp': time.time()
-        })
-
-        if target_sock:
+        self._stop_flag.clear()
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind(("", self.port))
+        self.server_socket.listen(8)
+        while not self._stop_flag.is_set():
             try:
-                target_sock.send(message_data.encode('utf-8'))
-                return True
-            except:
-                self.logger.error("Failed to send message to specific peer")
-                return False
-        else:
-            self.broadcast(message, None)
-            return True
-
-    def get_connection_count(self):
-        """Get number of active connections"""
-        return len(self.connections)
-
-    def get_connection_list(self):
-        """Get list of active connections"""
-        return [str(info['address']) for info in self.connection_info.values()]
-
-    def close_connection(self, conn, identifier):
-        """Close a connection and clean up"""
-        try:
-            conn.close()
-        except:
-            pass
-
-        if conn in self.connections:
-            self.connections.remove(conn)
-
-        if conn in self.connection_info:
-            del self.connection_info[conn]
-
-        self.logger.info(f"❌ Connection closed: {identifier}")
+                self.server_socket.settimeout(1.0)
+                client_sock, addr = self.server_socket.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self._handle_client, args=(client_sock, addr), daemon=True).start()
 
     def stop(self):
-        """Stop the server and clean up"""
-        self.running = False
-        if self.socket:
-            self.socket.close()
-
-        for conn in self.connections[:]:
-            self.close_connection(conn, "shutdown")
-
+        self._stop_flag.set()
+        try:
+            if self.server_socket:
+                self.server_socket.close()
+        except Exception:
+            pass
+        for c in list(self.connections):
+            try:
+                c["sock"].close()
+            except Exception:
+                pass
         self.connections.clear()
-        self.connection_info.clear()
-        self.logger.info("🛑 Server stopped")
 
+    def _handle_client(self, sock, addr):
+        conn = {"sock": sock, "addr": addr, "shared": None}
+        self.connections.append(conn)
+        try:
+            # --- Server side handshake ---
+            server_keyobj = self.qc.server_generate_kem_keypair()
+            server_pub = self.qc.server_public_bytes(server_keyobj)
+            self._send_json(sock, {"type": "handshake_server_pub", "public": base64.b64encode(server_pub).decode()})
 
-if __name__ == "__main__":
-    print("Testing LAN Chat...")
-    chat = LANChat()
-    server_thread = threading.Thread(target=chat.start_server, daemon=True)
-    server_thread.start()
-    input("Press Enter to stop...")
-    chat.stop()
+            msg = self._recv_json(sock)
+            if not msg or msg.get("type") != "handshake_client_blob":
+                raise RuntimeError("Invalid handshake from client")
+            blob = base64.b64decode(msg["blob"])
+            shared = self.qc.server_finalize(server_keyobj, blob)
+            conn["shared"] = shared
+
+            # --- Receive loop (encrypted frames) ---
+            while True:
+                frm = self._recv_json(sock)
+                if not frm:
+                    break
+                ftype = frm.get("type")
+                if ftype == "message":
+                    self._handle_encrypted_message(conn, frm)
+                elif ftype == "file":
+                    self._handle_encrypted_file(conn, frm)
+
+        except Exception:
+            traceback.print_exc()
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            if conn in self.connections:
+                self.connections.remove(conn)
+
+    # ---------------- Client (dialer) ----------------
+    def connect_to_peer(self, ip, port) -> bool:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect((ip, int(port)))
+        conn = {"sock": sock, "addr": (ip, int(port)), "shared": None}
+        self.connections.append(conn)
+
+        # --- Client handshake ---
+        msg = self._recv_json(sock)
+        if not msg or msg.get("type") != "handshake_server_pub":
+            sock.close()
+            self.connections.remove(conn)
+            return False
+        server_pub = base64.b64decode(msg["public"])
+        blob, shared = self.qc.client_encapsulate(server_pub)
+        self._send_json(sock, {"type": "handshake_client_blob", "blob": base64.b64encode(blob).decode()})
+        conn["shared"] = shared
+
+        # Reader thread
+        threading.Thread(target=self._reader_for_conn, args=(conn,), daemon=True).start()
+        return True
+
+    def _reader_for_conn(self, conn):
+        sock = conn["sock"]
+        try:
+            while True:
+                frm = self._recv_json(sock)
+                if not frm:
+                    break
+                ftype = frm.get("type")
+                if ftype == "message":
+                    self._handle_encrypted_message(conn, frm)
+                elif ftype == "file":
+                    self._handle_encrypted_file(conn, frm)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            if conn in self.connections:
+                self.connections.remove(conn)
+
+    # ---------------- Public API ----------------
+    def send_message(self, plaintext: str) -> bool:
+        ok_any = False
+        for conn in list(self.connections):
+            try:
+                shared = conn.get("shared")
+                if not shared:
+                    continue
+                nonce, ct = self.qc.encrypt(shared, plaintext.encode())
+                self._send_json(conn["sock"], {
+                    "type": "message",
+                    "nonce": base64.b64encode(nonce).decode(),
+                    "ciphertext": base64.b64encode(ct).decode()
+                })
+                ok_any = True
+            except Exception:
+                traceback.print_exc()
+        return ok_any
+
+    def send_image(self, path: str) -> bool:
+        """Send an image file (PNG only) to all connected peers."""
+        if not os.path.isfile(path):
+            print(f"❌ File not found: {path}")
+            return False
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except Exception as e:
+            print(f"❌ Read error: {e}")
+            return False
+
+        fname = os.path.basename(path)
+        ok_any = False
+        for conn in list(self.connections):
+            try:
+                shared = conn.get("shared")
+                if not shared:
+                    continue
+
+                # Build inner payload JSON and encrypt it
+                inner = json.dumps({
+                    "filename": fname,
+                    "b64": base64.b64encode(data).decode(),
+                }).encode()
+
+                nonce, ct = self.qc.encrypt(shared, inner)
+                self._send_json(conn["sock"], {
+                    "type": "file",
+                    "nonce": base64.b64encode(nonce).decode(),
+                    "ciphertext": base64.b64encode(ct).decode()
+                })
+                ok_any = True
+            except Exception:
+                traceback.print_exc()
+
+        return ok_any
+
+    def get_connection_count(self) -> int:
+        return len(self.connections)
+
+    # ---------------- Frame handlers ----------------
+    def _handle_encrypted_message(self, conn, frm):
+        try:
+            nonce = base64.b64decode(frm["nonce"])
+            ct = base64.b64decode(frm["ciphertext"])
+            pt = self.qc.decrypt(conn["shared"], nonce, ct)
+            self.on_plaintext_received(conn["addr"], pt.decode(errors="replace"))
+        except Exception:
+            print("❌ decrypt error (message)")
+
+    def _handle_encrypted_file(self, conn, frm):
+        """Decrypt and save incoming file payload."""
+        try:
+            nonce = base64.b64decode(frm["nonce"])
+            ct = base64.b64decode(frm["ciphertext"])
+            pt = self.qc.decrypt(conn["shared"], nonce, ct)
+            payload = json.loads(pt.decode())
+            fname = payload.get("filename", "file.bin")
+            raw = base64.b64decode(payload.get("b64", ""))
+
+            # Ensure unique filename
+            base = os.path.splitext(fname)[0]
+            ext = os.path.splitext(fname)[1] or ".png"
+            out = os.path.join(self.recv_dir, fname)
+            i = 1
+            while os.path.exists(out):
+                out = os.path.join(self.recv_dir, f"{base}_{i}{ext}")
+                i += 1
+
+            with open(out, "wb") as f:
+                f.write(raw)
+
+            print(f"📥 Image received: {out}")
+        except Exception:
+            print("❌ decrypt/save error (file)")
+            traceback.print_exc()
+
+    # ---------------- Helpers ----------------
+    def _send_json(self, sock, obj):
+        data = (json.dumps(obj) + "\n").encode()
+        sock.sendall(data)
+
+    def _recv_json(self, sock):
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return None
+            buf += chunk
+            if b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    return json.loads(line.decode())
+                except Exception:
+                    return None
+
+    # Hook to integrate with your UI/logging
+    def on_plaintext_received(self, addr, message: str):
+        print(f"📥 From {addr}: {message}")

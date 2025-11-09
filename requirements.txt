@@ -1,13 +1,27 @@
-# Essential dependencies
-qrcode[pil]>=7.4.2
-Pillow>=10.0.0
-opencv-python>=4.8.0
-stegano>=0.9.3
+# === Core Dependencies ===
 
-# Optional dependencies
-liboqs-python>=0.8.0
+# Cryptography (used for AES-GCM, X25519 fallback encryption)
 cryptography>=41.0.0
+
+# LAN and decentralized communication
 websockets>=11.0.0
 
-# Development dependencies
+# QR Code generation (with PIL support)
+qrcode[pil]>=7.4.2
+Pillow>=10.0.0
+
+# QR Code scanning (via camera)
+opencv-python>=4.8.0
+pyzbar>=0.1.9
+
+# Steganography support
+stegano>=0.11.3
+
+# === Optional Post-Quantum Crypto Support ===
+# Requires manual installation of liboqs
+# Uncomment after building oqs shared library
+# oqs @ git+https://github.com/open-quantum-safe/liboqs-python.git
+
+# === Development Dependencies ===
 pytest>=7.0.0
+loguru>=0.7.2

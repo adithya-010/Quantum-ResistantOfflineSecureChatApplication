@@ -1,141 +1,103 @@
-import base64
+"""
+pqc.py - Post-Quantum Cryptography abstraction layer.
+
+This module supports:
+- OQS (Kyber512) for key exchange and AES-GCM symmetric encryption
+- Fallback to X25519 (built-in) when OQS is unavailable
+"""
+
 import os
-from src.utils.logger import setup_logger
+import secrets
+
+# Check if liboqs is installed
+try:
+    import oqs
+    _HAS_OQS = True
+except ImportError:
+    _HAS_OQS = False
+
+from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 class QuantumCrypto:
     def __init__(self):
-        self.logger = setup_logger("QuantumCrypto")
+        self.backend = "oqs" if _HAS_OQS else "fallback"
+        self.server_keypair = None
+        self.shared_secret = None
+        self.aesgcm = None
 
-    def generate_kem_keypair(self):
-        """Generate key pair for key exchange"""
-        try:
-            # Placeholder for quantum key generation
-            public_key = b"quantum_public_key_placeholder"
-            return public_key, "kem_object_placeholder"
-        except Exception as e:
-            self.logger.error(f"Failed to generate KEM keypair: {e}")
-            return None, None
+    # 1️⃣ --- Server side KEM key pair ---
+    def server_generate_kem_keypair(self):
+        """
+        Generate server (listening side) KEM key pair.
+        Returns public key in bytes and stores the key object.
+        """
+        if self.backend == "oqs":
+            kem = oqs.Kem("Kyber512")
+            public_key = kem.generate_keypair()
+            self.server_keypair = kem
+            return public_key  # bytes
+        else:  # fallback: X25519
+            priv = x25519.X25519PrivateKey.generate()
+            pub = priv.public_key()
+            self.server_keypair = priv
+            return pub.public_bytes()
 
-    def key_exchange(self, peer_public_key, my_kem):
-        """Perform key exchange"""
-        try:
-            # Placeholder for quantum key exchange
-            ciphertext = b"quantum_ciphertext_placeholder"
-            shared_secret = b"quantum_shared_secret_placeholder"
+    def server_public_bytes(self, public_key):
+        """Return public key bytes (always bytes for Kyber)."""
+        return public_key
+
+    # 2️⃣ --- Client encapsulation ---
+    def client_encapsulate(self, server_public_key: bytes):
+        """
+        Client side: encapsulate using server's public key.
+        Returns ciphertext and shared_secret.
+        """
+        if self.backend == "oqs":
+            kem = oqs.Kem("Kyber512")
+            ciphertext, shared_secret = kem.encap_secret(server_public_key)
             return ciphertext, shared_secret
-        except Exception as e:
-            self.logger.error(f"Key exchange failed: {e}")
-            return None, None
+        else:
+            server_pub = x25519.X25519PublicKey.from_public_bytes(server_public_key)
+            client_priv = x25519.X25519PrivateKey.generate()
+            shared = client_priv.exchange(server_pub)
+            self.server_keypair = client_priv  # re-use holder for fallback
+            return client_priv.public_key().public_bytes(), shared
 
-    def generate_signing_keypair(self):
-        """Generate key pair for signatures"""
-        try:
-            # Placeholder for quantum signature generation
-            public_key = b"quantum_sig_public_key_placeholder"
-            return public_key, "signer_object_placeholder"
-        except Exception as e:
-            self.logger.error(f"Failed to generate signing keypair: {e}")
-            return None, None
+    # 3️⃣ --- Server decapsulation ---
+    def server_decapsulate(self, ciphertext: bytes):
+        """
+        Server side: decapsulate ciphertext to derive shared secret.
+        """
+        if self.backend == "oqs":
+            kem = self.server_keypair
+            shared_secret = kem.decap_secret(ciphertext)
+            return shared_secret
+        else:
+            server_priv = self.server_keypair
+            peer_pub = x25519.X25519PublicKey.from_public_bytes(ciphertext)
+            shared = server_priv.exchange(peer_pub)
+            return shared
 
-    def sign_message(self, message, signer):
-        """Sign a message"""
-        try:
-            if isinstance(message, str):
-                message = message.encode('utf-8')
-            return b"quantum_signature_placeholder"
-        except Exception as e:
-            self.logger.error(f"Failed to sign message: {e}")
-            return None
+    # 4️⃣ --- AESGCM binding ---
+    def derive_aesgcm(self, shared_secret: bytes):
+        """Derive AESGCM cipher using 256-bit key."""
+        key = shared_secret[:32]
+        self.aesgcm = AESGCM(key)
 
-    def verify_signature(self, message, signature, public_key):
-        """Verify a signature"""
-        try:
-            if isinstance(message, str):
-                message = message.encode('utf-8')
-            return True  # Placeholder
-        except Exception as e:
-            self.logger.error(f"Signature verification failed: {e}")
-            return False
+    def encrypt(self, plaintext: bytes) -> bytes:
+        """Encrypt with AESGCM (nonce||ciphertext)."""
+        if not self.aesgcm:
+            raise RuntimeError("AESGCM not initialized")
+        nonce = secrets.token_bytes(12)
+        ct = self.aesgcm.encrypt(nonce, plaintext, None)
+        return nonce + ct
 
-    def encrypt_message(self, message, shared_secret):
-        """Encrypt message using shared secret"""
-        try:
-            if isinstance(message, str):
-                message = message.encode('utf-8')
+    def decrypt(self, ciphertext: bytes) -> bytes:
+        """Decrypt AESGCM (nonce||ciphertext)."""
+        if not self.aesgcm:
+            raise RuntimeError("AESGCM not initialized")
+        nonce, ct = ciphertext[:12], ciphertext[12:]
+        return self.aesgcm.decrypt(nonce, ct, None)
 
-            # Simple XOR encryption (placeholder for quantum encryption)
-            encrypted = bytearray()
-            for i, char in enumerate(message):
-                encrypted.append(char ^ shared_secret[i % len(shared_secret)])
-
-            return base64.b64encode(encrypted).decode('utf-8')
-
-        except Exception as e:
-            self.logger.error(f"Encryption failed: {e}")
-            return None
-
-    def decrypt_message(self, encrypted_data, shared_secret):
-        """Decrypt message using shared secret"""
-        try:
-            encrypted_data = base64.b64decode(encrypted_data)
-
-            # Simple XOR decryption (placeholder for quantum decryption)
-            decrypted = bytearray()
-            for i, char in enumerate(encrypted_data):
-                decrypted.append(char ^ shared_secret[i % len(shared_secret)])
-
-            return decrypted.decode('utf-8')
-
-        except Exception as e:
-            self.logger.error(f"Decryption failed: {e}")
-            return None
-
-    def get_supported_algorithms(self):
-        """Get list of supported quantum algorithms"""
-        try:
-            # Try to import liboqs if available
-            import liboqs
-            kems = liboqs.get_enabled_KEM_mechanisms()
-            sigs = liboqs.get_enabled_sig_mechanisms()
-            return {
-                'key_encapsulation': kems,
-                'signatures': sigs
-            }
-        except ImportError:
-            # Return placeholder if liboqs not available
-            return {
-                'key_encapsulation': ['Kyber512', 'Kyber768', 'Kyber1024'],
-                'signatures': ['Dilithium2', 'Dilithium3', 'Dilithium5']
-            }
-
-
-def test_quantum_crypto():
-    """Test quantum cryptography functionality"""
-    crypto = QuantumCrypto()
-
-    print("🔐 Testing Quantum Cryptography...")
-
-    # Test encryption/decryption with placeholder
-    shared_secret = b"test_shared_secret"
-    test_message = "Hello Quantum World!"
-
-    encrypted = crypto.encrypt_message(test_message, shared_secret)
-    decrypted = crypto.decrypt_message(encrypted, shared_secret)
-
-    if decrypted == test_message:
-        print("✅ Basic encryption/decryption working")
-    else:
-        print("❌ Basic encryption/decryption failed")
-
-    # Test algorithm detection
-    algorithms = crypto.get_supported_algorithms()
-    print(
-        f"✅ Supported algorithms detected: {len(algorithms['key_encapsulation'])} KEMs, {len(algorithms['signatures'])} signatures")
-
-    print("🎉 Quantum crypto tests completed!")
-    return True
-
-
-if __name__ == "__main__":
-    test_quantum_crypto()
